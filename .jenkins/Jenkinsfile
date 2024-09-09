@@ -1,0 +1,106 @@
+pipeline {
+    agent any
+    environment {
+        DOCKER_REGISTRY = "atakan1927"
+    }
+    stages {
+        stage('CI') {
+            steps {
+                script {
+                    // Build and test web-app
+                    dir('web-app') {
+                        sh 'npm install'
+                        sh 'npm run lint'
+                        sh 'npm test'
+                        
+                        // Update version
+                        def version = incrementVersion(readFile('version.txt').trim())
+                        writeFile file: 'version.txt', text: version
+                        
+                        // Build Docker image
+                        sh "docker build -t ${DOCKER_REGISTRY}/web-app:${version} ."
+                    }
+                }
+            }
+        }
+        
+        stage('Create/Update Staging') {
+            steps {
+                script {
+                    // Check if staging namespace exists
+                    def stagingExists = sh(script: "kubectl get ns staging", returnStatus: true) == 0
+                    
+                    if (!stagingExists) {
+                        // Create staging environment
+                        dir('infra/terraform') {
+                            sh 'terraform init'
+                            sh 'terraform apply -auto-approve -var environment=staging'
+                        }
+                    }
+                    
+                    // Deploy/Update services to staging
+                    def webAppVersion = readFile('web-app/version.txt').trim()
+                    sh """
+                        helm upgrade --install web-app-staging infra/helm/web-app \
+                            --namespace staging \
+                            --set image.tag=${webAppVersion} \
+                            --set ingress.hosts[0].host=web-app-staging.yourdomain.com
+                    """
+                    // Deploy worker and database similarly
+                }
+            }
+        }
+        
+        stage('Push Image') {
+            steps {
+                script {
+                    def version = readFile('web-app/version.txt').trim()
+                    sh "docker push ${DOCKER_REGISTRY}/web-app:${version}"
+                }
+            }
+        }
+        
+        stage('Run Tests') {
+            steps {
+                // Run your smoke tests and other necessary tests
+                sh 'npm run test:e2e'
+            }
+        }
+        
+        stage('CD') {
+            steps {
+                script {
+                    def webAppVersion = readFile('web-app/version.txt').trim()
+                    sh """
+                        helm upgrade --install web-app-prod infra/helm/web-app \
+                            --namespace production \
+                            --set image.tag=${webAppVersion} \
+                            --set ingress.hosts[0].host=web-app.yourdomain.com
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            script {
+                if (!currentBuild.previousBuild || currentBuild.previousBuild.result != 'SUCCESS') {
+                    // If this is the first successful build after failure(s), don't schedule cleanup
+                    return
+                }
+                // Schedule staging cleanup
+                def queueSize = Jenkins.instance.queue.items.size()
+                if (queueSize == 0) {
+                    build job: 'remove-staging', wait: false
+                }
+            }
+        }
+    }
+}
+
+def incrementVersion(version) {
+    def parts = version.split('\\.')
+    def patch = parts[2].toInteger() + 1
+    return "${parts[0]}.${parts[1]}.${patch}"
+}

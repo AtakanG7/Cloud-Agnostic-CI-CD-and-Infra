@@ -1,0 +1,9 @@
+replicaCount: 1
+
+image:
+  tag: "1.0.0"
+
+ingress:
+  hosts:
+    - host: web-app.staging.mycompany.com
+      paths: ["/"]

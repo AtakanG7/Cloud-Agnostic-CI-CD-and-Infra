@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+
+    route:
+      group_by: ['alertname', 'namespace', 'pod']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: 'email-notifications'
+
+    receivers:
+    - name: 'email-notifications'
+      email_configs:
+      - to: 'pwxcv7352@gmail.com'
+        from: 'alertmanager@brevo.com'
+        smarthost: 'smtp-relay.brevo.com:587'
+        auth_username: '749398003@smtp-brevo.com'
+        auth_identity: '749398003@smtp-brevo.com'
+        auth_password: 'YgVx28UQpfb0RNSL'
+
+
+  prometheus-rules.yml: |
+    groups:
+    - name: kubernetes-apps
+      rules:
+      - alert: PodHighCPUUsage
+        expr: sum(rate(container_cpu_usage_seconds_total{container!=""}[5m])) by (namespace, pod) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High CPU usage detected in pod
+          description: Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has high CPU usage
+
+      - alert: PodHighMemoryUsage
+        expr: sum(container_memory_usage_bytes{container!=""}) by (namespace, pod) / sum(container_spec_memory_limit_bytes{container!=""}) by (namespace, pod) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High memory usage detected in pod
+          description: Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has high memory usage
+
+      - alert: PodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 5 > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Pod is crash looping
+          description: Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is crash looping
+
+      - alert: PodNotReady
+        expr: sum by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown"}) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Pod is not ready
+          description: Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been in a non-ready state for more than 15 minutes
+
+    - name: node
+      rules:
+      - alert: NodeHighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High CPU usage detected on node
+          description: Node {{ $labels.instance }} has high CPU usage
+
+      - alert: NodeHighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High memory usage detected on node
+          description: Node {{ $labels.instance }} has high memory usage
+
+      - alert: NodeDiskSpaceRunningOut
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Node disk space is running out
+          description: Node {{ $labels.instance }} has less than 10% free disk space
