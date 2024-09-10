@@ -16,7 +16,7 @@ spec:
         - name: web-app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           ports:
-            - containerPort: 3000
+            - containerPort: 3004
           env:
             - name: DB_HOST
               value: {{ .Values.database.host | quote }}
@@ -24,3 +24,16 @@ spec:
               value: {{ .Values.database.port | quote }}
             - name: DB_NAME
               value: {{ .Values.database.name | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app-service
+  namespace: production
+spec:
+  selector:
+    app: web-app
+  ports:
+    - protocol: TCP
+      port: 3004
+      targetPort: 3004

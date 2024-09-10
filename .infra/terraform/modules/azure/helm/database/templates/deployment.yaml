@@ -33,3 +33,16 @@ data:
   init.js: |
     db = db.getSiblingDB('mydatabase');
     db.createCollection('data');
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: database-service
+  namespace: production
+spec:
+  selector:
+    app: database
+  ports:
+    - protocol: TCP
+      port: 27017
+      targetPort: 27017
