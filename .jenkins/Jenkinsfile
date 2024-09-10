@@ -2,97 +2,137 @@ pipeline {
     agent any
     environment {
         DOCKER_REGISTRY = "atakan1927"
+        HELM_REPO_URL = "https://your-github-username.github.io/KubernetesInfra/"
+        KUBECONFIG = credentials('kubeconfig-credential-id')
+        GIT_CREDS = credentials('github-credentials-id')
     }
     stages {
-        stage('CI') {
+        stage('Preparation') {
             steps {
                 script {
-                    // Build and test web-app
-                    dir('web-app') {
-                        sh 'npm install'
-                        sh 'npm run lint'
-                        sh 'npm test'
-                        
-                        // Update version
-                        def version = incrementVersion(readFile('version.txt').trim())
-                        writeFile file: 'version.txt', text: version
-                        
-                        // Build Docker image
-                        sh "docker build -t ${DOCKER_REGISTRY}/web-app:${version} ."
+                    sh "helm repo add myrepo ${HELM_REPO_URL}"
+                    sh "helm repo update"
+                    sh "git config user.email 'jenkins@example.com'"
+                    sh "git config user.name 'Jenkins'"
+                }
+            }
+        }
+        stage('Build and Test Web App') {
+            steps {
+                dir('project_repositories/web-app') {
+                    sh 'npm ci'
+                    sh 'npm run lint'
+                    sh 'npm test'
+                    script {
+                        env.WEB_APP_VERSION = incrementVersion(readFile('version.txt').trim())
+                        writeFile file: 'version.txt', text: env.WEB_APP_VERSION
+                        sh "docker build -t ${DOCKER_REGISTRY}/web-app:${env.WEB_APP_VERSION} ."
+                        sh "docker push ${DOCKER_REGISTRY}/web-app:${env.WEB_APP_VERSION}"
                     }
                 }
             }
         }
-        
-        stage('Create/Update Staging') {
+        stage('Update Web App Helm Chart') {
             steps {
                 script {
-                    // Check if staging namespace exists
-                    def stagingExists = sh(script: "kubectl get ns staging", returnStatus: true) == 0
+                    updateHelmChart('web-app', env.WEB_APP_VERSION)
+                    sh "helm package charts/web-app -d docs/"
+                    sh "helm repo index docs --url ${HELM_REPO_URL}"
+                    sh "git add ."
+                    sh "git commit -m 'Update web-app Helm chart to version ${env.WEB_APP_VERSION}'"
+                    sh "git push https://${GIT_CREDS_USR}:${GIT_CREDS_PSW}@github.com/your-username/KubernetesInfra.git main"
+                }
+            }
+        }
+        stage('Deploy to Staging') {
+            steps {
+                script {
+                    // Ensure staging namespace exists
+                    sh "kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f -"
                     
-                    if (!stagingExists) {
-                        // Create staging environment
-                        dir('infra/terraform') {
-                            sh 'terraform init'
-                            sh 'terraform apply -auto-approve -var environment=staging'
-                        }
-                    }
-                    
-                    // Deploy/Update services to staging
-                    def webAppVersion = readFile('web-app/version.txt').trim()
+                    // Deploy database
                     sh """
-                        helm upgrade --install web-app-staging infra/helm/web-app \
+                        helm upgrade --install database-staging myrepo/database \
                             --namespace staging \
-                            --set image.tag=${webAppVersion} \
-                            --set ingress.hosts[0].host=web-app-staging.yourdomain.com
+                            --values charts/database/values-staging.yaml
                     """
-                    // Deploy worker and database similarly
-                }
-            }
-        }
-        
-        stage('Push Image') {
-            steps {
-                script {
-                    def version = readFile('web-app/version.txt').trim()
-                    sh "docker push ${DOCKER_REGISTRY}/web-app:${version}"
-                }
-            }
-        }
-        
-        stage('Run Tests') {
-            steps {
-                // Run your smoke tests and other necessary tests
-                sh 'npm run test:e2e'
-            }
-        }
-        
-        stage('CD') {
-            steps {
-                script {
-                    def webAppVersion = readFile('web-app/version.txt').trim()
+                    
+                    // Deploy worker
                     sh """
-                        helm upgrade --install web-app-prod infra/helm/web-app \
+                        helm upgrade --install worker-staging myrepo/worker \
+                            --namespace staging \
+                            --values charts/worker/values-staging.yaml
+                    """
+                    
+                    // Deploy web-app
+                    sh """
+                        helm upgrade --install web-app-staging myrepo/web-app \
+                            --namespace staging \
+                            --values charts/web-app/values-staging.yaml \
+                            --set image.tag=${env.WEB_APP_VERSION}
+                    """
+                }
+            }
+        }
+        stage('Run Integration Tests') {
+            steps {
+                script {
+                    // Wait for deployments to be ready
+                    sh "kubectl rollout status deployment/database-staging -n staging"
+                    sh "kubectl rollout status deployment/worker-staging -n staging"
+                    sh "kubectl rollout status deployment/web-app-staging -n staging"
+                    
+                    // Run your integration tests here
+                    sh 'echo "Running integration tests against staging environment..."'
+                    // Add your actual integration test commands here
+                }
+            }
+        }
+        stage('Approve Production Deployment') {
+            steps {
+                input message: 'Deploy to production?', ok: 'Deploy'
+            }
+        }
+        stage('Deploy to Production') {
+            steps {
+                script {
+                    // Ensure production namespace exists
+                    sh "kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -"
+                    
+                    // Deploy database
+                    sh """
+                        helm upgrade --install database-prod myrepo/database \
                             --namespace production \
-                            --set image.tag=${webAppVersion} \
-                            --set ingress.hosts[0].host=web-app.yourdomain.com
+                            --values charts/database/values-production.yaml
+                    """
+                    
+                    // Deploy worker
+                    sh """
+                        helm upgrade --install worker-prod myrepo/worker \
+                            --namespace production \
+                            --values charts/worker/values-production.yaml
+                    """
+                    
+                    // Deploy web-app
+                    sh """
+                        helm upgrade --install web-app-prod myrepo/web-app \
+                            --namespace production \
+                            --values charts/web-app/values-production.yaml \
+                            --set image.tag=${env.WEB_APP_VERSION}
                     """
                 }
             }
         }
     }
-    
     post {
+        always {
+            cleanWs()
+        }
         success {
             script {
-                if (!currentBuild.previousBuild || currentBuild.previousBuild.result != 'SUCCESS') {
-                    // If this is the first successful build after failure(s), don't schedule cleanup
-                    return
-                }
-                // Schedule staging cleanup
-                def queueSize = Jenkins.instance.queue.items.size()
-                if (queueSize == 0) {
-                    build job: 'remove-staging', wait: false
+                if (env.BRANCH_NAME == 'main') {
+                    // Optionally, clean up staging environment
+                    // sh "kubectl delete namespace staging"
                 }
             }
         }
@@ -103,4 +143,13 @@ def incrementVersion(version) {
     def parts = version.split('\\.')
     def patch = parts[2].toInteger() + 1
     return "${parts[0]}.${parts[1]}.${patch}"
+}
+
+def updateHelmChart(String chartName, String version) {
+    dir("charts/${chartName}") {
+        sh "sed -i 's/^version:.*/version: ${version}/' Chart.yaml"
+        sh "sed -i 's/tag:.*/tag: \"${version}\"/' values.yaml"
+        sh "sed -i 's/tag:.*/tag: \"${version}\"/' values-staging.yaml"
+        sh "sed -i 's/tag:.*/tag: \"${version}\"/' values-production.yaml"
+    }
 }
