@@ -1,208 +1,93 @@
 pipeline {
     agent any
-    
+
     environment {
         DOCKER_REGISTRY = 'atakan1927'
         HELM_REPO = 'https://github.com/AtakanG7/gh-pages.git'
         APP_NAME = 'web-app'
         CHART_PATH = "charts/${APP_NAME}"
     }
-    
+
     stages {
         stage('Checkout Application') {
             steps {
-                git url: 'https://github.com/AtakanG7/web-app', branch: 'main'
+                script {
+                    load 'pipeline/stages/checkoutApplication.groovy'
+                }
             }
         }
-        
         stage('Clone Helm Chart Repository') {
             steps {
-                sh "git clone ${HELM_REPO} helm-repo"
-                sh "helm repo add myrepo https://atakang7.github.io/gh-pages/docs"
+                script {
+                    load 'pipeline/stages/cloneHelmChartRepository.groovy'
+                }
             }
         }
-        
         stage('Update Chart Versions') {
             steps {
                 script {
-                    dir('helm-repo') {
-                    // Get current version
-                    def currentVersion = sh(script: "grep 'version:' ${CHART_PATH}/Chart.yaml | awk '{print \$2}'", returnStdout: true).trim()
-                    
-                    if (currentVersion.isEmpty()) {
-                        currentVersion = "0.1.0"  // Default version if not found
-                        echo "Warning: Version not found in Chart.yaml. Using default version: ${currentVersion}"
-                    }
-                    
-                    env.NEW_VERSION = incrementVersion(currentVersion)
-                    
-                    // Update Chart.yaml
-                    sh "sed -i 's/version: .*/version: ${env.NEW_VERSION}/' ${CHART_PATH}/Chart.yaml"
-                    
-                    // Update values-staging.yaml and values-production.yaml
-                    sh """
-                        sed -i 's/tag: .*/tag: ${env.NEW_VERSION}/' ${CHART_PATH}/values-staging.yaml
-                        sed -i 's/tag: .*/tag: ${env.NEW_VERSION}/' ${CHART_PATH}/values-production.yaml
-                    """
-                    
-                    // Check if files were updated successfully
-                    def updatedVersion = sh(script: "grep 'version:' ${CHART_PATH}/Chart.yaml | awk '{print \$2}'", returnStdout: true).trim()
-                    if (updatedVersion != env.NEW_VERSION) {
-                        error "Failed to update chart version"
-                    }
-                        
-                        // Commit and push the changes
-                        withCredentials([usernamePassword(credentialsId: 'github-credentials', passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
-                            sh """
-                                git config --global user.email "atakan1927@gmail.com"
-                                git config --global user.name "Atakan G"
-                                git add ${CHART_PATH}/Chart.yaml ${CHART_PATH}/values-staging.yaml ${CHART_PATH}/values-production.yaml
-                                git commit -m "Update ${APP_NAME} chart version to ${env.NEW_VERSION} for staging"
-                                git remote set-url origin https://atakang7:${GIT_PASSWORD}@github.com/AtakanG7/gh-pages.git
-                                git push --set-upstream origin main
-                            """
-                        }
-                    }
+                    load 'pipeline/stages/updateChartVersions.groovy'
                 }
             }
         }
-        
         stage('Build and Push Docker Image') {
             steps {
                 script {
-                    // Build the Docker image with the specified version
-                    sh " docker build -t atakan1927/web-app:${env.NEW_VERSION} ."
-                    
-                    // Push the Docker image to the registry
-                    sh " docker push atakan1927/web-app:${env.NEW_VERSION}"
-                    
-                    // Verify that the image was pushed successfully
-                    sh " docker pull atakan1927/web-app:${env.NEW_VERSION}"
+                    load 'pipeline/stages/buildAndPushDockerImage.groovy'
                 }
             }
         }
-        
         stage('Mirror Production in Staging') {
             steps {
                 script {
-                    dir('helm-repo') {
-                        def charts = sh(script: "ls charts", returnStdout: true).trim().split()
-                        for (def chart in charts) {
-
-                            sh """
-                                helm upgrade --install ${chart}-staging charts/${chart} \
-                                    --namespace staging \
-                                    -f charts/${chart}/values-staging.yaml \
-                                    --wait
-                            """
-                            
-                        }
-                    }
+                    load 'pipeline/stages/mirrorProductionInStaging.groovy'
                 }
             }
         }
-                
         stage('Deploy to Staging') {
             steps {
                 script {
-                    dir('helm-repo') {
-                        sh """
-                            helm upgrade --install ${APP_NAME}-staging ${CHART_PATH} \
-                                --namespace staging \
-                                -f ${CHART_PATH}/values-staging.yaml \
-                                --set image.tag=${env.NEW_VERSION} \
-                                --wait --timeout 5m
-                        """
-                        
-                        // Verify deployment
-                        def deploymentStatus = sh(script: """
-                            kubectl rollout status deployment/${APP_NAME}-staging -n staging --timeout=300s
-                        """, returnStatus: true)
-                        
-                        if (deploymentStatus != 0) {
-                            error "Deployment to staging failed"
-                        }
-                    }
+                    load 'pipeline/stages/deployToStaging.groovy'
                 }
             }
         }
-        
         stage('Run Tests') {
             steps {
-                echo "Running tests on staging environment..."
-                // Add your test commands here
+                script {
+                    load 'pipeline/stages/runTests.groovy'
+                }
             }
         }
-        
         stage('Approval') {
             steps {
-                input message: 'Approve deployment to production?', ok: 'Deploy'
+                script {
+                    load 'pipeline/stages/approval.groovy'
+                }
             }
         }
-        
         stage('Update Production Chart') {
             steps {
                 script {
-                    dir('helm-repo') {
-                        sh """
-                            helm package ${CHART_PATH} --destination docs
-                            helm repo index .
-                            git add docs ${CHART_PATH}
-                            git commit -m "Update ${APP_NAME} chart to version ${env.NEW_VERSION}"
-                            git push origin main
-                        """
-                        
-                        // Verify push was successful
-                        def pushStatus = sh(script: "git push origin main", returnStatus: true)
-                        if (pushStatus != 0) {
-                            error "Failed to push updated chart to repository"
-                        }
-                    }
+                    load 'pipeline/stages/updateProductionChart.groovy'
                 }
             }
         }
-        
         stage('Remove Staging Resources') {
             steps {
                 script {
-                    // Uninstall all Helm releases in the staging namespace
-                    def helmReleases = sh(script: "helm list -n staging -q", returnStdout: true).trim()
-                    if (helmReleases) {
-                        helmReleases.split().each { release ->
-                            sh "helm uninstall ${release} -n staging"
-                        }
-                    }
-
-                    // Delete all resources in the staging namespace
-                    sh """
-                        kubectl delete all --all -n staging
-                        kubectl delete pvc --all -n staging
-                        kubectl delete configmap --all -n staging
-                        kubectl delete secret --all -n staging --ignore-not-found=true
-                    """
-                    
+                    load 'pipeline/stages/removeStagingResources.groovy'
                 }
             }
         }
-        
         stage('Deploy to Production') {
             steps {
                 script {
-                    dir('helm-repo') {
-                        sh """
-                            helm repo update
-                            helm upgrade --install ${APP_NAME} ${CHART_PATH} \
-                                --namespace production \
-                                -f ${CHART_PATH}/values-production.yaml \
-                                --set image.tag=${env.NEW_VERSION} \
-                                --wait --timeout 10m
-                        """
-                    }
+                    load 'pipeline/stages/deployToProduction.groovy'
                 }
             }
         }
     }
-    
+
     post {
         failure {
             echo "Pipeline failed. Please check the logs and take necessary actions."
@@ -214,12 +99,4 @@ pipeline {
             sh "rm -rf helm-repo"
         }
     }
-}
-
-def incrementVersion(String version) {
-    def parts = version.split('\\.')
-    def lastPart = parts.last()
-    def newLastPart = (lastPart.toInteger() + 1).toString()
-    parts[parts.size() - 1] = newLastPart
-    return parts.join('.')
 }
