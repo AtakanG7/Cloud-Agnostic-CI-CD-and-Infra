@@ -1,155 +1,225 @@
 pipeline {
     agent any
+    
     environment {
-        DOCKER_REGISTRY = "atakan1927"
-        HELM_REPO_URL = "https://your-github-username.github.io/KubernetesInfra/"
-        KUBECONFIG = credentials('kubeconfig-credential-id')
-        GIT_CREDS = credentials('github-credentials-id')
+        DOCKER_REGISTRY = 'atakan1927'
+        HELM_REPO = 'https://github.com/AtakanG7/gh-pages.git'
+        APP_NAME = 'web-app'
+        CHART_PATH = "charts/${APP_NAME}"
     }
+    
     stages {
-        stage('Preparation') {
+        stage('Checkout Application') {
             steps {
-                script {
-                    sh "helm repo add myrepo ${HELM_REPO_URL}"
-                    sh "helm repo update"
-                    sh "git config user.email 'jenkins@example.com'"
-                    sh "git config user.name 'Jenkins'"
-                }
+                git url: 'https://github.com/AtakanG7/web-app', branch: 'main'
             }
         }
-        stage('Build and Test Web App') {
+        
+        stage('Clone Helm Chart Repository') {
             steps {
-                dir('project_repositories/web-app') {
-                    sh 'npm ci'
-                    sh 'npm run lint'
-                    sh 'npm test'
-                    script {
-                        env.WEB_APP_VERSION = incrementVersion(readFile('version.txt').trim())
-                        writeFile file: 'version.txt', text: env.WEB_APP_VERSION
-                        sh "docker build -t ${DOCKER_REGISTRY}/web-app:${env.WEB_APP_VERSION} ."
-                        sh "docker push ${DOCKER_REGISTRY}/web-app:${env.WEB_APP_VERSION}"
+                sh "git clone ${HELM_REPO} helm-repo"
+                sh "helm repo add myrepo https://atakang7.github.io/gh-pages/docs"
+            }
+        }
+        
+        stage('Update Chart Versions') {
+            steps {
+                script {
+                    dir('helm-repo') {
+                    // Get current version
+                    def currentVersion = sh(script: "grep 'version:' ${CHART_PATH}/Chart.yaml | awk '{print \$2}'", returnStdout: true).trim()
+                    
+                    if (currentVersion.isEmpty()) {
+                        currentVersion = "0.1.0"  // Default version if not found
+                        echo "Warning: Version not found in Chart.yaml. Using default version: ${currentVersion}"
+                    }
+                    
+                    env.NEW_VERSION = incrementVersion(currentVersion)
+                    
+                    // Update Chart.yaml
+                    sh "sed -i 's/version: .*/version: ${env.NEW_VERSION}/' ${CHART_PATH}/Chart.yaml"
+                    
+                    // Update values-staging.yaml and values-production.yaml
+                    sh """
+                        sed -i 's/tag: .*/tag: ${env.NEW_VERSION}/' ${CHART_PATH}/values-staging.yaml
+                        sed -i 's/tag: .*/tag: ${env.NEW_VERSION}/' ${CHART_PATH}/values-production.yaml
+                    """
+                    
+                    // Check if files were updated successfully
+                    def updatedVersion = sh(script: "grep 'version:' ${CHART_PATH}/Chart.yaml | awk '{print \$2}'", returnStdout: true).trim()
+                    if (updatedVersion != env.NEW_VERSION) {
+                        error "Failed to update chart version"
+                    }
+                        
+                        // Commit and push the changes
+                        withCredentials([usernamePassword(credentialsId: 'github-credentials', passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
+                            sh """
+                                git config --global user.email "atakan1927@gmail.com"
+                                git config --global user.name "Atakan G"
+                                git add ${CHART_PATH}/Chart.yaml ${CHART_PATH}/values-staging.yaml ${CHART_PATH}/values-production.yaml
+                                git commit -m "Update ${APP_NAME} chart version to ${env.NEW_VERSION} for staging"
+                                git remote set-url origin https://atakang7:${GIT_PASSWORD}@github.com/AtakanG7/gh-pages.git
+                                git push --set-upstream origin main
+                            """
+                        }
                     }
                 }
             }
         }
-        stage('Update Web App Helm Chart') {
+        
+        stage('Build and Push Docker Image') {
             steps {
                 script {
-                    updateHelmChart('web-app', env.WEB_APP_VERSION)
-                    sh "helm package charts/web-app -d docs/"
-                    sh "helm repo index docs --url ${HELM_REPO_URL}"
-                    sh "git add ."
-                    sh "git commit -m 'Update web-app Helm chart to version ${env.WEB_APP_VERSION}'"
-                    sh "git push https://${GIT_CREDS_USR}:${GIT_CREDS_PSW}@github.com/your-username/KubernetesInfra.git main"
+                    // Build the Docker image with the specified version
+                    sh " docker build -t atakan1927/web-app:${env.NEW_VERSION} ."
+                    
+                    // Push the Docker image to the registry
+                    sh " docker push atakan1927/web-app:${env.NEW_VERSION}"
+                    
+                    // Verify that the image was pushed successfully
+                    sh " docker pull atakan1927/web-app:${env.NEW_VERSION}"
                 }
             }
         }
+        
+        stage('Mirror Production in Staging') {
+            steps {
+                script {
+                    dir('helm-repo') {
+                        def charts = sh(script: "ls charts", returnStdout: true).trim().split()
+                        for (def chart in charts) {
+
+                            sh """
+                                helm upgrade --install ${chart}-staging charts/${chart} \
+                                    --namespace staging \
+                                    -f charts/${chart}/values-staging.yaml \
+                                    --wait
+                            """
+                            
+                        }
+                    }
+                }
+            }
+        }
+                
         stage('Deploy to Staging') {
             steps {
                 script {
-                    // Ensure staging namespace exists
-                    sh "kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f -"
-                    
-                    // Deploy database
-                    sh """
-                        helm upgrade --install database-staging myrepo/database \
-                            --namespace staging \
-                            --values charts/database/values-staging.yaml
-                    """
-                    
-                    // Deploy worker
-                    sh """
-                        helm upgrade --install worker-staging myrepo/worker \
-                            --namespace staging \
-                            --values charts/worker/values-staging.yaml
-                    """
-                    
-                    // Deploy web-app
-                    sh """
-                        helm upgrade --install web-app-staging myrepo/web-app \
-                            --namespace staging \
-                            --values charts/web-app/values-staging.yaml \
-                            --set image.tag=${env.WEB_APP_VERSION}
-                    """
+                    dir('helm-repo') {
+                        sh """
+                            helm upgrade --install ${APP_NAME}-staging ${CHART_PATH} \
+                                --namespace staging \
+                                -f ${CHART_PATH}/values-staging.yaml \
+                                --set image.tag=${env.NEW_VERSION} \
+                                --wait --timeout 5m
+                        """
+                        
+                        // Verify deployment
+                        def deploymentStatus = sh(script: """
+                            kubectl rollout status deployment/${APP_NAME}-staging -n staging --timeout=300s
+                        """, returnStatus: true)
+                        
+                        if (deploymentStatus != 0) {
+                            error "Deployment to staging failed"
+                        }
+                    }
                 }
             }
         }
-        stage('Run Integration Tests') {
+        
+        stage('Run Tests') {
+            steps {
+                echo "Running tests on staging environment..."
+                // Add your test commands here
+            }
+        }
+        
+        stage('Approval') {
+            steps {
+                input message: 'Approve deployment to production?', ok: 'Deploy'
+            }
+        }
+        
+        stage('Update Production Chart') {
             steps {
                 script {
-                    // Wait for deployments to be ready
-                    sh "kubectl rollout status deployment/database-staging -n staging"
-                    sh "kubectl rollout status deployment/worker-staging -n staging"
-                    sh "kubectl rollout status deployment/web-app-staging -n staging"
-                    
-                    // Run your integration tests here
-                    sh 'echo "Running integration tests against staging environment..."'
-                    // Add your actual integration test commands here
+                    dir('helm-repo') {
+                        sh """
+                            helm package ${CHART_PATH} --destination docs
+                            helm repo index .
+                            git add docs ${CHART_PATH}
+                            git commit -m "Update ${APP_NAME} chart to version ${env.NEW_VERSION}"
+                            git push origin main
+                        """
+                        
+                        // Verify push was successful
+                        def pushStatus = sh(script: "git push origin main", returnStatus: true)
+                        if (pushStatus != 0) {
+                            error "Failed to push updated chart to repository"
+                        }
+                    }
                 }
             }
         }
-        stage('Approve Production Deployment') {
+        
+        stage('Remove Staging Resources') {
             steps {
-                input message: 'Deploy to production?', ok: 'Deploy'
+                script {
+                    // Uninstall all Helm releases in the staging namespace
+                    def helmReleases = sh(script: "helm list -n staging -q", returnStdout: true).trim()
+                    if (helmReleases) {
+                        helmReleases.split().each { release ->
+                            sh "helm uninstall ${release} -n staging"
+                        }
+                    }
+
+                    // Delete all resources in the staging namespace
+                    sh """
+                        kubectl delete all --all -n staging
+                        kubectl delete pvc --all -n staging
+                        kubectl delete configmap --all -n staging
+                        kubectl delete secret --all -n staging --ignore-not-found=true
+                    """
+                    
+                }
             }
         }
+        
         stage('Deploy to Production') {
             steps {
                 script {
-                    // Ensure production namespace exists
-                    sh "kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -"
-                    
-                    // Deploy database
-                    sh """
-                        helm upgrade --install database-prod myrepo/database \
-                            --namespace production \
-                            --values charts/database/values-production.yaml
-                    """
-                    
-                    // Deploy worker
-                    sh """
-                        helm upgrade --install worker-prod myrepo/worker \
-                            --namespace production \
-                            --values charts/worker/values-production.yaml
-                    """
-                    
-                    // Deploy web-app
-                    sh """
-                        helm upgrade --install web-app-prod myrepo/web-app \
-                            --namespace production \
-                            --values charts/web-app/values-production.yaml \
-                            --set image.tag=${env.WEB_APP_VERSION}
-                    """
+                    dir('helm-repo') {
+                        sh """
+                            helm repo update
+                            helm upgrade --install ${APP_NAME} ${CHART_PATH} \
+                                --namespace production \
+                                -f ${CHART_PATH}/values-production.yaml \
+                                --set image.tag=${env.NEW_VERSION} \
+                                --wait --timeout 10m
+                        """
+                    }
                 }
             }
         }
     }
+    
     post {
-        always {
-            cleanWs()
+        failure {
+            echo "Pipeline failed. Please check the logs and take necessary actions."
         }
         success {
-            script {
-                if (env.BRANCH_NAME == 'main') {
-                    // Optionally, clean up staging environment
-                    // sh "kubectl delete namespace staging"
-                }
-            }
+            echo "Pipeline completed successfully. New version ${env.NEW_VERSION} is deployed to production."
+        }
+        always {
+            sh "rm -rf helm-repo"
         }
     }
 }
 
-def incrementVersion(version) {
+def incrementVersion(String version) {
     def parts = version.split('\\.')
-    def patch = parts[2].toInteger() + 1
-    return "${parts[0]}.${parts[1]}.${patch}"
-}
-
-def updateHelmChart(String chartName, String version) {
-    dir("charts/${chartName}") {
-        sh "sed -i 's/^version:.*/version: ${version}/' Chart.yaml"
-        sh "sed -i 's/tag:.*/tag: \"${version}\"/' values.yaml"
-        sh "sed -i 's/tag:.*/tag: \"${version}\"/' values-staging.yaml"
-        sh "sed -i 's/tag:.*/tag: \"${version}\"/' values-production.yaml"
-    }
+    def lastPart = parts.last()
+    def newLastPart = (lastPart.toInteger() + 1).toString()
+    parts[parts.size() - 1] = newLastPart
+    return parts.join('.')
 }
