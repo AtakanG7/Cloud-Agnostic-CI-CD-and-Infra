@@ -1,4 +1,4 @@
-module "kubernetes" {
+module "kubernetes" { 
   source = "./modules/azure"
   resource_group_name      = var.resource_group_name
   kubernetes_cluster_name  = var.kubernetes_cluster_name
