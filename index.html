@@ -111,14 +111,102 @@
             transform: translateY(-5px);
             box-shadow: 0 4px 8px rgba(0,0,0,0.2);
         }
+        .diagram-container {
+            display: flex;
+            justify-content: flex-start;
+            align-items: flex-start;
+            padding: 2em;
+            overflow-x: auto;
+            min-width: 1200px;
+        }
+        .terraform-project {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-right: 2em;
+        }
+        .terraform-image {
+            width: 200px;
+            height: auto;
+            margin-bottom: 1em;
+        }
+        .arrow-right {
+            width: 50px;
+            height: 2px;
+            background-color: #2c3e50;
+            position: relative;
+            margin: 0 1em;
+        }
+        .arrow-right::after {
+            content: '';
+            position: absolute;
+            right: -10px;
+            top: -4px;
+            width: 0;
+            height: 0;
+            border-left: 10px solid #2c3e50;
+            border-top: 5px solid transparent;
+            border-bottom: 5px solid transparent;
+        }
+        .cloud-providers {
+            display: flex;
+            flex-direction: column;
+            gap: 1em;
+            margin-right: 1em;
+        }
+        .cloud-provider {
+            background-color: #fff;
+            border: 2px solid #2c3e50;
+            border-radius: 10px;
+            padding: 25px 20px;
+            font-weight: bold;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .kubernetes-cluster {
+            border: 3px solid #326CE5;
+            border-radius: 15px;
+            padding: 20px;
+            background-color: #F7FAFC;
+            display: flex;
+            flex-direction: row;
+            gap: 1rem;
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
+        }
+        .cluster-title {
+            color: #326CE5;
+            font-weight: bold;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        .namespace {
+            border: 2px solid #4A5568;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .namespace-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .service {
+            background-color: #E2E8F0;
+            border-radius: 5px;
+            padding: 5px;
+            margin: 5px 0;
+            font-size: 0.9em;
+        }
+        .monitoring { background-color: #BEE3F8; color: #2A4365; }
+        .staging { background-color: #FEEBC8; color: #7B341E; }
+        .production { background-color: #FED7D7; color: #742A2A; }
     </style>
 </head>
 <body>
     <div id="slideContainer">
         <div class="slide active">
-            <h1>Cloud Agnostic Design Using Kubernetes, Helm, and Jenkins</h1>
+            <h1>Cloud Agnostic Design Using Terraform, Kubernetes, Helm, and Jenkins</h1>
             <p style="font-size: 1.5em;">Achieving Scalable and Flexible Deployment Pipelines</p>
             <div class="tech-stack">
+                <img src="https://blogs.vmware.com/cloudprovider/files/2019/04/og-image-8b3e4f7d-blog-aspect-ratio.png" alt="Terraform logo">
                 <img src="https://img-resize-cdn.joshmartin.ch/2000x0%2C0297127326a2d62f464846509f6db87f447340fd5bbca07b7830b5c389ee83ca/https://joshmartin.ch/app/uploads/2018/01/logo.svg" alt="Kubernetes logo">
                 <img src="https://static-00.iconduck.com/assets.00/helm-icon-493x512-9fdnqczp.png" alt="Helm logo">
                 <img src="https://img.icons8.com/?size=512&id=39292&format=png" alt="Jenkins logo">
@@ -131,6 +219,7 @@
                 <li>Designing applications and infrastructure to run across multiple cloud providers with minimal changes</li>
                 <li>Key Technologies:
                     <ul>
+                        <li>Terraform: Infra setup</li>
                         <li>Kubernetes: Container orchestration</li>
                         <li>Helm: Kubernetes package manager</li>
                         <li>Jenkins: CI/CD automation</li>
@@ -139,6 +228,61 @@
             </ul>
         </div>
 
+        <div class="slide">
+            <h1>Cloud Agnostic Architecture With Terraform</h1>
+            <li>Abstracts away the infra setup details and provides the flexibility of choosing any cloud provider for your services.</li>
+            <div class="diagram-container">
+                <div class="terraform-project" style="gap: 1rem;">
+                    <img src="https://blogs.vmware.com/cloudprovider/files/2019/04/og-image-8b3e4f7d-blog-aspect-ratio.png" style="width: 4rem; border-radius: 50px !important;" alt="Terraform logo">
+                    <img src="https://atakangul.com/uploads/2024/09/13/image-1726216206734-641221120.PNG" style="width: 15rem; border-radius: 10px !important;" alt="Terraform Project Structure" class="terraform-image">
+                </div>
+                <div style="display: flex; justify-content: center; align-items: center; height: 100%; position: relative;">
+                    <div class="arrow-right"></div>
+                </div>
+                <div class="cloud-providers" style="margin-left: 2rem;">
+                    <div class="cloud-provider">AWS</div>
+                    <div class="cloud-provider">Azure</div>
+                    <div class="cloud-provider">GCP</div>
+                </div>
+                <div style="display: flex; justify-content: center; align-items: center; height: 100%; position: relative; margin-right: 1rem;">
+                    <div class="arrow-right"></div>
+                </div>
+                <div class="kubernetes-cluster">
+                    <div class="cluster-title">Kubernetes Cluster</div>
+                    <div class="namespace monitoring">
+                        <div class="namespace-title">Monitoring Namespace</div>
+                        <div class="service">Prometheus</div>
+                        <div class="service">Grafana</div>
+                        <div class="service">Exporters</div>
+                    </div>
+                    <div class="namespace staging">
+                        <div class="namespace-title">Staging Namespace</div>
+                        <div class="service">Awaiting Jenkins Tests</div>
+                    </div>
+                    <div class="namespace production">
+                        <div class="namespace-title">Production Namespace</div>
+                        <div class="service">Web App</div>
+                        <div class="service">Worker</div>
+                        <div class="service">MongoDB</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="slide">
+            <h1>Jenkins Pipeline Stages</h1>
+            <div class="pipeline-steps">
+                <div class="pipeline-step">Code Checkout</div>
+                <div class="pipeline-step">Helm Chart Setup</div>
+                <div class="pipeline-step">Version Management</div>
+                <div class="pipeline-step">Docker Build & Push</div>
+                <div class="pipeline-step">Staging Deploy</div>
+                <div class="pipeline-step">Testing</div>
+                <div class="pipeline-step">Approval</div>
+                <div class="pipeline-step">Production Deploy</div>
+            </div>
+        </div>
+        
         <div class="slide">
             <h1>Jenkins Pipeline Stages</h1>
             <div class="pipeline-steps">
@@ -225,20 +369,25 @@ stage('Build and Push Docker Image') {
             <h1>Staging Deployment</h1>
             <p>Purpose: Test new version in a controlled environment</p>
             <pre>
-stage('Deploy to Staging') {
-    steps {
-        script {
-            sh """
-                # Use Helm to upgrade or install the application in the staging environment
-                helm upgrade --install ${APP_NAME}-staging ${CHART_PATH} \
-                    --namespace staging \
-                    -f ${CHART_PATH}/values-staging.yaml \
-                    --set image.tag=${env.NEW_VERSION}
-                # This command deploys the application to a staging environment for testing
-            """
-        }
-    }
-}
+                stage('Mirror Production in Staging') {
+                    steps {
+                        script {
+                            dir('helm-repo') {
+                                def charts = sh(script: "ls charts", returnStdout: true).trim().split()
+                                for (def chart in charts) {
+        
+                                    sh """
+                                        helm upgrade --install ${chart}-staging charts/${chart} \
+                                            --namespace staging \
+                                            -f charts/${chart}/values-staging.yaml \
+                                            --wait
+                                    """
+                                    
+                                }
+                            }
+                        }
+                    }
+                }
             </pre>
         </div>
 
